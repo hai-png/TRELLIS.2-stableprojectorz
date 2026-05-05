@@ -442,11 +442,15 @@ def install_dependencies():
         # Build o_voxel from source if the pre-built wheel fails verification
         # Pre-built wheels may have ABI incompatibilities with different PyTorch versions
         print("\n--- Verifying o_voxel installation ---")
+        o_voxel_ok = False
         try:
             import o_voxel
             print("o_voxel loaded successfully.")
-        except ImportError as e:
+            o_voxel_ok = True
+        except Exception as e:
             print(f"o_voxel failed to load: {e}")
+        
+        if not o_voxel_ok:
             print("Rebuilding o_voxel from source...")
             # Uninstall the broken wheel first
             subprocess.run(f'"{sys.executable}" -m pip uninstall -y o_voxel', shell=True, stdout=subprocess.DEVNULL)
@@ -466,11 +470,15 @@ def install_dependencies():
 
         # Build cumesh from source if the pre-built wheel fails verification
         print("\n--- Verifying cumesh installation ---")
+        cumesh_ok = False
         try:
             import cumesh
             print("cumesh loaded successfully.")
-        except ImportError as e:
+            cumesh_ok = True
+        except Exception as e:
             print(f"cumesh failed to load: {e}")
+        
+        if not cumesh_ok:
             print("Rebuilding cumesh from source...")
             # Uninstall the broken wheel first
             subprocess.run(f'"{sys.executable}" -m pip uninstall -y cumesh', shell=True, stdout=subprocess.DEVNULL)
