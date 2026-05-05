@@ -439,6 +439,47 @@ def install_dependencies():
                 "Installing Utils3D (Git)"
             )
 
+        # Build o_voxel from source if the pre-built wheel fails verification
+        # Pre-built wheels may have ABI incompatibilities with different PyTorch versions
+        print("\n--- Verifying o_voxel installation ---")
+        try:
+            import o_voxel
+            print("o_voxel loaded successfully.")
+        except ImportError as e:
+            print(f"o_voxel failed to load: {e}")
+            print("Rebuilding o_voxel from source...")
+            # Uninstall the broken wheel first
+            subprocess.run(f'"{sys.executable}" -m pip uninstall -y o_voxel', shell=True, stdout=subprocess.DEVNULL)
+            # Install from source (the o-voxel directory contains the source code)
+            o_voxel_src_dir = CODE_DIR / "o-voxel"
+            if o_voxel_src_dir.exists():
+                run_command_with_retry(
+                    f'pip install "{o_voxel_src_dir}" --no-binary :all:',
+                    "Building o_voxel from source"
+                )
+            else:
+                # Fallback: install from git
+                run_command_with_retry(
+                    "pip install git+https://github.com/IGRIT-Tech/o-voxel.git@9a4eb15e4021b67b12c460c7057d642626897ec8 --no-binary :all:",
+                    "Building o_voxel from Git source"
+                )
+
+        # Build cumesh from source if the pre-built wheel fails verification
+        print("\n--- Verifying cumesh installation ---")
+        try:
+            import cumesh
+            print("cumesh loaded successfully.")
+        except ImportError as e:
+            print(f"cumesh failed to load: {e}")
+            print("Rebuilding cumesh from source...")
+            # Uninstall the broken wheel first
+            subprocess.run(f'"{sys.executable}" -m pip uninstall -y cumesh', shell=True, stdout=subprocess.DEVNULL)
+            # Install from git (no local source directory available)
+            run_command_with_retry(
+                "pip install git+https://github.com/EasternJournalist/cumesh.git@9a4eb15e4021b67b12c460c7057d642626897ec8 --no-binary :all:",
+                "Building cumesh from Git source"
+            )
+
         print("\nInstallation completed successfully!")
 
     except InstallationError as e:
