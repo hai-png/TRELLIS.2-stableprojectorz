@@ -380,7 +380,7 @@ def install_dependencies():
         # Define which wheels are sensitive to PyTorch version mismatches
         TORCH_SENSITIVE_WHEELS = ["o_voxel", "cumesh"]
         
-        # For Linux, download wheels from GitHub if local wheels are Windows-only
+        # Set up wheel directory based on platform
         if IS_LINUX:
             linux_whl_dir = CODE_DIR / "whl_linux"
             linux_whl_dir.mkdir(exist_ok=True)
@@ -417,9 +417,12 @@ def install_dependencies():
                                     print(f"  Failed to download {wheel_name} after {MAX_RETRIES} attempts")
                                     if dest_path.exists():
                                         dest_path.unlink()
-                
-                # Use linux_whl_dir for Linux
-                whl_dir = linux_whl_dir
+            
+            # Always use linux_whl_dir for Linux (whether we downloaded or already had wheels)
+            whl_dir = linux_whl_dir
+        else:
+            # Windows: use local whl directory
+            whl_dir = CODE_DIR / "whl"
         
         # Install wheels, but skip torch-sensitive ones if PyTorch version doesn't match expected
         for whl_file in sorted(whl_dir.glob("*.whl")):
