@@ -293,12 +293,13 @@ def install_dependencies():
         # 1. PyTorch installation based on platform
         if IS_LINUX:
             # Linux: Use PyTorch 2.7.0 with CUDA 12.6 (matching the Linux wheels)
+            # IMPORTANT: Must use exact version 2.7.0 for wheel compatibility
             print("\n--- Installing PyTorch 2.7.0 (CUDA 12.6) for Linux ---")
-            torch_cmd = "pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu126"
+            torch_cmd = "pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu126 --force-reinstall"
         else:
             # Windows: Use PyTorch 2.8.0 with CUDA 12.8
             print("\n--- Installing PyTorch 2.8.0 (CUDA 12.8) for Windows ---")
-            torch_cmd = "pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128"
+            torch_cmd = "pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 --force-reinstall"
         
         run_command_with_retry(torch_cmd, "Installing PyTorch")
 
@@ -370,7 +371,14 @@ def install_dependencies():
         # 4. Install Local Wheels
         print("\n--- Installing Custom Wheels ---")
         
-        whl_dir = CODE_DIR / "whl"
+        # Check PyTorch version compatibility with pre-built wheels
+        # Pre-built wheels are built for specific PyTorch versions and may have ABI incompatibilities
+        import torch
+        torch_version = torch.__version__.split('+')[0]  # Get base version without CUDA suffix
+        print(f"\nDetected PyTorch version: {torch.__version__}")
+        
+        # Define which wheels are sensitive to PyTorch version mismatches
+        TORCH_SENSITIVE_WHEELS = ["o_voxel", "cumesh"]
         
         # For Linux, download wheels from GitHub if local wheels are Windows-only
         if IS_LINUX:
@@ -413,6 +421,7 @@ def install_dependencies():
                 # Use linux_whl_dir for Linux
                 whl_dir = linux_whl_dir
         
+        # Install wheels, but skip torch-sensitive ones if PyTorch version doesn't match expected
         for whl_file in sorted(whl_dir.glob("*.whl")):
             # Pillow-SIMD is handled above (Windows only)
             if whl_file.name.lower().startswith("pillow"):
@@ -428,6 +437,22 @@ def install_dependencies():
             if whl_file.name.lower().startswith("flash_attn") and not _gpu_supports_flash_attn():
                 print(f"Skipping {whl_file.name} (GPU does not support Flash Attention, will use xformers instead)")
                 continue
+            
+            # Check if this is a torch-sensitive wheel and PyTorch version might mismatch
+            wheel_name_lower = whl_file.name.lower()
+            should_skip = False
+            for sensitive_pkg in TORCH_SENSITIVE_WHEELS:
+                if sensitive_pkg.replace('_', '-') in wheel_name_lower or sensitive_pkg in wheel_name_lower:
+                    # Pre-built wheels in this repo are for PyTorch 2.7.0
+                    # If user has a different version (e.g., 2.7.1), skip and build from source
+                    if torch_version != "2.7.0":
+                        print(f"Skipping {whl_file.name} (built for PyTorch 2.7.0, but you have {torch.__version__})")
+                        should_skip = True
+                        break
+            
+            if should_skip:
+                continue
+                
             print(f"Installing: {whl_file.name}")
             run_command_with_retry(f'pip install "{whl_file}"', f"Installing {whl_file.name}")
 
@@ -439,20 +464,27 @@ def install_dependencies():
                 "Installing Utils3D (Git)"
             )
 
-        # Build o_voxel from source if the pre-built wheel fails verification
+        # Build o_voxel from source if it was skipped due to PyTorch version mismatch or if verification fails
         # Pre-built wheels may have ABI incompatibilities with different PyTorch versions
         print("\n--- Verifying o_voxel installation ---")
         o_voxel_ok = False
-        try:
-            import o_voxel
-            print("o_voxel loaded successfully.")
-            o_voxel_ok = True
-        except Exception as e:
-            print(f"o_voxel failed to load: {e}")
+        
+        # Check if we skipped o_voxel due to version mismatch
+        o_voxel_skipped = torch_version != "2.7.0"
+        
+        if o_voxel_skipped:
+            print(f"o_voxel was skipped due to PyTorch version mismatch (have {torch.__version__}, wheel built for 2.7.0)")
+        else:
+            try:
+                import o_voxel
+                print("o_voxel loaded successfully.")
+                o_voxel_ok = True
+            except Exception as e:
+                print(f"o_voxel failed to load: {e}")
         
         if not o_voxel_ok:
-            print("Rebuilding o_voxel from source...")
-            # Uninstall the broken wheel first
+            print("Building o_voxel from source...")
+            # Uninstall any existing wheel first
             subprocess.run(f'"{sys.executable}" -m pip uninstall -y o_voxel', shell=True, stdout=subprocess.DEVNULL)
             # Install from source (the o-voxel directory contains the source code)
             o_voxel_src_dir = CODE_DIR / "o-voxel"
@@ -468,19 +500,26 @@ def install_dependencies():
                     "Building o_voxel from Git source"
                 )
 
-        # Build cumesh from source if the pre-built wheel fails verification
+        # Build cumesh from source if it was skipped due to PyTorch version mismatch or if verification fails
         print("\n--- Verifying cumesh installation ---")
         cumesh_ok = False
-        try:
-            import cumesh
-            print("cumesh loaded successfully.")
-            cumesh_ok = True
-        except Exception as e:
-            print(f"cumesh failed to load: {e}")
+        
+        # Check if we skipped cumesh due to version mismatch
+        cumesh_skipped = torch_version != "2.7.0"
+        
+        if cumesh_skipped:
+            print(f"cumesh was skipped due to PyTorch version mismatch (have {torch.__version__}, wheel built for 2.7.0)")
+        else:
+            try:
+                import cumesh
+                print("cumesh loaded successfully.")
+                cumesh_ok = True
+            except Exception as e:
+                print(f"cumesh failed to load: {e}")
         
         if not cumesh_ok:
-            print("Rebuilding cumesh from source...")
-            # Uninstall the broken wheel first
+            print("Building cumesh from source...")
+            # Uninstall any existing wheel first
             subprocess.run(f'"{sys.executable}" -m pip uninstall -y cumesh', shell=True, stdout=subprocess.DEVNULL)
             # Install from git (no local source directory available)
             run_command_with_retry(
