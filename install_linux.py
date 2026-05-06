@@ -491,13 +491,45 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
                         wheel_dir = download_dir
 
         # Install from prebuilt wheels
+        # IMPORTANT: Install in dependency order — cumesh and flex_gemm must come
+        # before o_voxel (o_voxel depends on both). We also install them with
+        # --no-deps first, then re-install o_voxel with deps so pip can resolve
+        # transitive dependencies like plyfile, trimesh, etc.
         cuda_packages_installed = False
         if wheel_dir is not None:
             print(f"\n--- Installing CUDA packages from prebuilt wheels ({wheel_dir.name}) ---")
             whl_files = sorted(wheel_dir.glob("*.whl"))
-            for whl in whl_files:
+
+            # Define install order: dependencies first, then dependents
+            # cumesh and flex_gemm must be installed before o_voxel
+            priority_order = ['cumesh', 'flex_gemm', 'nvdiffrast', 'nvdiffrec_render',
+                              'custom_rasterizer', 'o_voxel']
+            def sort_key(p):
+                name = p.stem.split('-')[0].lower()
+                try:
+                    return priority_order.index(name)
+                except ValueError:
+                    return len(priority_order)
+
+            whl_files_sorted = sorted(whl_files, key=sort_key)
+
+            for whl in whl_files_sorted:
                 print(f"  Installing: {whl.name}")
-                pip_install(str(whl), desc=f"Installing {whl.name}", fatal=False)
+                # Use --no-deps for CUDA packages to avoid pip trying to fetch
+                # git dependencies from o_voxel's metadata (even though we fixed
+                # the wheels, this is extra safety)
+                run_command(
+                    f'{sys.executable} -m pip install --no-cache-dir --no-deps "{whl}"',
+                    desc=f"Installing {whl.name}",
+                    fatal=False
+                )
+
+            # Now install o_voxel's non-CUDA dependencies (plyfile, trimesh, etc.)
+            o_voxel_whl = [w for w in whl_files_sorted if w.stem.startswith('o_voxel')]
+            if o_voxel_whl:
+                print("  Installing o_voxel runtime dependencies (plyfile, trimesh, etc.)...")
+                pip_install("plyfile trimesh zstandard easydict", desc="o_voxel dependencies", fatal=False)
+
             cuda_packages_installed = len(whl_files) > 0
 
         # Fallback: build from source

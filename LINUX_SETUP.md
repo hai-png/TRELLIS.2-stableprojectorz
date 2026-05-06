@@ -95,8 +95,17 @@ pip uninstall -y pillow && pip install pillow-simd
 # 6. Install flash-attn (Ampere+ GPUs only)
 pip install flash-attn --no-build-isolation
 
-# 7. Install ALL CUDA packages from prebuilt wheels (seconds, not hours!)
-pip install whl/linux/torch291_cp312/*.whl
+# 7. Install CUDA packages from prebuilt wheels (seconds, not hours!)
+#    IMPORTANT: Install in dependency order — cumesh/flex_gemm BEFORE o_voxel
+#    Use --no-deps to avoid pip trying to resolve git+ URLs in wheel metadata
+pip install --no-deps whl/linux/torch291_cp312/cumesh*.whl
+pip install --no-deps whl/linux/torch291_cp312/flex_gemm*.whl
+pip install --no-deps whl/linux/torch291_cp312/nvdiffrast*.whl
+pip install --no-deps whl/linux/torch291_cp312/nvdiffrec_render*.whl
+pip install --no-deps whl/linux/torch291_cp312/custom_rasterizer*.whl
+pip install --no-deps whl/linux/torch291_cp312/o_voxel*.whl
+# Install o_voxel's non-CUDA dependencies:
+pip install plyfile trimesh zstandard easydict
 
 # 8. Download model weights (optional, ~20GB)
 python -c "from huggingface_hub import snapshot_download; snapshot_download('microsoft/TRELLIS.2-4B')"
@@ -138,18 +147,32 @@ Prebuilt Linux wheels are available from the [visualbruno/ComfyUI-Trellis2](http
 
 ### Manual Prebuilt Wheel Installation
 
-If you prefer to install the prebuilt wheels manually:
+If you prefer to install the prebuilt wheels manually, install them in dependency order with `--no-deps` to avoid pip trying to resolve git+ URLs from wheel metadata:
 
 ```bash
 # For Python 3.12 + PyTorch 2.9.1 (recommended):
-pip install whl/linux/torch291_cp312/*.whl
+WHL_DIR=whl/linux/torch291_cp312
+pip install --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
+    "$WHL_DIR"/nvdiffrast*.whl "$WHL_DIR"/nvdiffrec_render*.whl \
+    "$WHL_DIR"/custom_rasterizer*.whl "$WHL_DIR"/o_voxel*.whl
+pip install plyfile trimesh zstandard easydict
 
 # For Python 3.12 + PyTorch 2.7.0:
-pip install whl/linux/torch270_cp312/*.whl
+WHL_DIR=whl/linux/torch270_cp312
+pip install --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
+    "$WHL_DIR"/nvdiffrast*.whl "$WHL_DIR"/custom_rasterizer*.whl \
+    "$WHL_DIR"/o_voxel*.whl
+pip install plyfile trimesh zstandard easydict
 
 # For Python 3.13 + PyTorch 2.11.0:
-pip install whl/linux/torch2110_cp313/*.whl
+WHL_DIR=whl/linux/torch2110_cp313
+pip install --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
+    "$WHL_DIR"/nvdiffrast*.whl "$WHL_DIR"/nvdiffrec_render*.whl \
+    "$WHL_DIR"/o_voxel*.whl
+pip install plyfile trimesh zstandard easydict
 ```
+
+> **Why `--no-deps`?** Some prebuilt wheels (especially `o_voxel`) may contain git+ URL dependencies in their metadata (e.g., `cumesh@ git+https://...`). Using `--no-deps` prevents pip from trying to fetch these, since the wheels are already provided locally. The install scripts handle this automatically.
 
 ---
 
@@ -254,6 +277,14 @@ python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
   ```bash
   pip install triton
   ```
+
+### "Cannot install cumesh and o-voxel — conflicting dependencies"
+This happens when pip tries to resolve `o_voxel`'s git+ dependencies against the prebuilt `cumesh` wheel. The fix is to use `--no-deps`:
+```bash
+pip install --no-deps whl/linux/torch291_cp312/*.whl
+pip install plyfile trimesh zstandard easydict
+```
+The install scripts (`install_linux.py` and `setup_linux.sh`) handle this automatically.
 
 ---
 

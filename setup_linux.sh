@@ -367,13 +367,46 @@ fi
 
 if [ "$PREBUILT_FOUND" = true ]; then
     info "Installing CUDA packages from prebuilt wheels (much faster than source builds)..."
-    for whl in "$PREBUILT_DIR"/*.whl; do
-        info "  Installing $(basename "$whl")"
-        $PYTHON_CMD -m pip install "$whl" --no-deps 2>/dev/null || {
-            warn "  Failed to install $(basename "$whl"), will try with deps..."
-            $PYTHON_CMD -m pip install "$whl" || warn "  Could not install $(basename "$whl")"
-        }
+
+    # Install in dependency order: cumesh and flex_gemm must come before o_voxel
+    # because o_voxel depends on both. Use --no-deps to prevent pip from trying
+    # to resolve git+ dependencies from old wheel metadata.
+    INSTALL_ORDER=("cumesh" "flex_gemm" "nvdiffrast" "nvdiffrec_render" "custom_rasterizer" "o_voxel")
+
+    for pkg_prefix in "${INSTALL_ORDER[@]}"; do
+        for whl in "$PREBUILT_DIR"/${pkg_prefix}*.whl; do
+            if [ -f "$whl" ]; then
+                info "  Installing $(basename "$whl")"
+                $PYTHON_CMD -m pip install "$whl" --no-deps || {
+                    warn "  Failed to install $(basename "$whl")"
+                }
+                break
+            fi
+        done
     done
+
+    # Install any remaining wheels not in the priority list
+    for whl in "$PREBUILT_DIR"/*.whl; do
+        base=$(basename "$whl")
+        already=false
+        for pkg_prefix in "${INSTALL_ORDER[@]}"; do
+            if [[ "$base" == ${pkg_prefix}* ]]; then
+                already=true
+                break
+            fi
+        done
+        if [ "$already" = false ]; then
+            info "  Installing $base"
+            $PYTHON_CMD -m pip install "$whl" --no-deps || warn "  Failed to install $base"
+        fi
+    done
+
+    # Install o_voxel's runtime dependencies (not CUDA, just pip packages)
+    if ls "$PREBUILT_DIR"/o_voxel*.whl 1>/dev/null 2>&1; then
+        info "  Installing o_voxel runtime dependencies (plyfile, trimesh, etc.)..."
+        $PYTHON_CMD -m pip install plyfile trimesh zstandard easydict 2>/dev/null || true
+    fi
+
     ok "Prebuilt CUDA packages installed."
 else
     warn "No prebuilt wheels found for Python $PY_CP_TAG."
