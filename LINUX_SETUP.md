@@ -91,21 +91,21 @@ pip install xformers==0.0.33 --index-url https://download.pytorch.org/whl/cu128
 # 5. Install utils3d
 pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
 
-# 6. Install Pillow-SIMD
-pip uninstall -y pillow && pip install pillow-simd
+# 6. Install Pillow (standard; Pillow-SIMD 9.5 is too old and breaks gradio)
+pip install pillow
 
 # 7. Install flash-attn (Ampere+ GPUs only)
 pip install flash-attn --no-build-isolation
 
 # 8. Install CUDA packages from prebuilt wheels (seconds, not hours!)
 #    IMPORTANT: Install in dependency order — cumesh/flex_gemm BEFORE o_voxel
-#    Use --no-deps to avoid pip trying to resolve git+ URLs in wheel metadata
-pip install --no-deps whl/linux/torch291_cp312/cumesh*.whl
-pip install --no-deps whl/linux/torch291_cp312/flex_gemm*.whl
-pip install --no-deps whl/linux/torch291_cp312/nvdiffrast*.whl
-pip install --no-deps whl/linux/torch291_cp312/nvdiffrec_render*.whl
-pip install --no-deps whl/linux/torch291_cp312/custom_rasterizer*.whl
-pip install --no-deps whl/linux/torch291_cp312/o_voxel*.whl
+#    Use --force-reinstall --no-deps to replace any stale wheels and avoid git+ deps
+pip install --force-reinstall --no-deps whl/linux/torch291_cp312/cumesh*.whl
+pip install --force-reinstall --no-deps whl/linux/torch291_cp312/flex_gemm*.whl
+pip install --force-reinstall --no-deps whl/linux/torch291_cp312/nvdiffrast*.whl
+pip install --force-reinstall --no-deps whl/linux/torch291_cp312/nvdiffrec_render*.whl
+pip install --force-reinstall --no-deps whl/linux/torch291_cp312/custom_rasterizer*.whl
+pip install --force-reinstall --no-deps whl/linux/torch291_cp312/o_voxel*.whl
 # Install o_voxel's non-CUDA dependencies:
 pip install plyfile trimesh zstandard easydict
 
@@ -149,26 +149,26 @@ Prebuilt Linux wheels are available from the [visualbruno/ComfyUI-Trellis2](http
 
 ### Manual Prebuilt Wheel Installation
 
-If you prefer to install the prebuilt wheels manually, install them in dependency order with `--no-deps` to avoid pip trying to resolve git+ URLs from wheel metadata:
+If you prefer to install the prebuilt wheels manually, install them in dependency order with `--force-reinstall --no-deps` to avoid pip trying to resolve git+ URLs from wheel metadata and to replace any stale wheels from a different torch version:
 
 ```bash
 # For Python 3.12 + PyTorch 2.9.1 (recommended):
 WHL_DIR=whl/linux/torch291_cp312
-pip install --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
+pip install --force-reinstall --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
     "$WHL_DIR"/nvdiffrast*.whl "$WHL_DIR"/nvdiffrec_render*.whl \
     "$WHL_DIR"/custom_rasterizer*.whl "$WHL_DIR"/o_voxel*.whl
 pip install plyfile trimesh zstandard easydict
 
 # For Python 3.12 + PyTorch 2.7.0:
 WHL_DIR=whl/linux/torch270_cp312
-pip install --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
+pip install --force-reinstall --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
     "$WHL_DIR"/nvdiffrast*.whl "$WHL_DIR"/custom_rasterizer*.whl \
     "$WHL_DIR"/o_voxel*.whl
 pip install plyfile trimesh zstandard easydict
 
 # For Python 3.13 + PyTorch 2.11.0:
 WHL_DIR=whl/linux/torch2110_cp313
-pip install --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
+pip install --force-reinstall --no-deps "$WHL_DIR"/cumesh*.whl "$WHL_DIR"/flex_gemm*.whl \
     "$WHL_DIR"/nvdiffrast*.whl "$WHL_DIR"/nvdiffrec_render*.whl \
     "$WHL_DIR"/o_voxel*.whl
 pip install plyfile trimesh zstandard easydict
@@ -279,6 +279,14 @@ python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
   ```bash
   pip install triton
   ```
+
+### "cannot import name 'Image' from 'PIL' (unknown location)"
+This is caused by Pillow-SIMD 9.5 which is too old for modern packages like gradio. Fix by installing standard Pillow:
+```bash
+pip uninstall -y pillow-simd Pillow-SIMD
+pip install pillow
+```
+The install scripts now automatically avoid Pillow-SIMD < 10.0.
 
 ### "Cannot install cumesh and o-voxel — conflicting dependencies"
 This happens when pip tries to resolve `o_voxel`'s git+ dependencies against the prebuilt `cumesh` wheel. The fix is to use `--no-deps`:

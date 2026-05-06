@@ -364,13 +364,29 @@ if [ "$BASIC" = true ]; then
     info "Installing utils3d from GitHub..."
     $PYTHON_CMD -m pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
 
-    # Pillow-SIMD (faster than standard Pillow)
-    info "Installing Pillow-SIMD..."
-    $PYTHON_CMD -m pip uninstall -y pillow 2>/dev/null || true
-    $PYTHON_CMD -m pip install pillow-simd || {
-        warn "Pillow-SIMD failed to install, falling back to standard Pillow..."
+    # Pillow-SIMD (faster than standard Pillow, but only if compatible)
+    # NOTE: Pillow-SIMD 9.5 is very old and may break gradio/other packages.
+    # Only use it if a recent version is available; otherwise stick with standard Pillow.
+    info "Configuring Pillow..."
+    PIL_SIMD_VERSION=$($PYTHON_CMD -m pip index versions pillow-simd 2>/dev/null | head -1 | grep -oP '\d+\.\d+\.\d+' || echo "")
+    if [ -n "$PIL_SIMD_VERSION" ]; then
+        # Check if version is at least 10.0 (compatible with modern packages)
+        PIL_MAJOR=$(echo "$PIL_SIMD_VERSION" | cut -d. -f1)
+        if [ "$PIL_MAJOR" -ge 10 ]; then
+            info "Installing Pillow-SIMD $PIL_SIMD_VERSION..."
+            $PYTHON_CMD -m pip uninstall -y pillow 2>/dev/null || true
+            $PYTHON_CMD -m pip install "pillow-simd>=$PIL_SIMD_VERSION" || {
+                warn "Pillow-SIMD failed to install, falling back to standard Pillow..."
+                $PYTHON_CMD -m pip install pillow
+            }
+        else
+            warn "Pillow-SIMD $PIL_SIMD_VERSION is too old (need >=10.0). Using standard Pillow instead."
+            $PYTHON_CMD -m pip install pillow
+        fi
+    else
+        info "Pillow-SIMD not available. Installing standard Pillow..."
         $PYTHON_CMD -m pip install pillow
-    }
+    fi
 fi
 
 # ============================================================================
@@ -409,12 +425,28 @@ LINUX_WHL_DIR="$WORKDIR/whl/linux"
 PY_CP_TAG="cp$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"
 PREBUILT_FOUND=false
 
-# Try to find prebuilt wheels matching our Python version
-if [ -d "$LINUX_WHL_DIR" ]; then
+# Map torch version to wheel directory name
+# e.g. 2.9.1 -> torch291, 2.7.0 -> torch270, 2.11.0 -> torch2110
+TORCH_DIR_SUFFIX=$(echo "$TORCH_VERSION" | sed 's/\.//g')  # e.g. "291"
+TORCH_WHL_DIR="torch${TORCH_DIR_SUFFIX}_${PY_CP_TAG}"      # e.g. "torch291_cp312"
+
+# Try exact match first: torch version + python version
+if [ -d "$LINUX_WHL_DIR/$TORCH_WHL_DIR" ]; then
+    whl_count=$(find "$LINUX_WHL_DIR/$TORCH_WHL_DIR" -name "*.whl" 2>/dev/null | wc -l)
+    if [ "$whl_count" -gt 0 ]; then
+        info "Found $whl_count prebuilt Linux wheels matching PyTorch $TORCH_VERSION + Python $PY_CP_TAG"
+        PREBUILT_DIR="$LINUX_WHL_DIR/$TORCH_WHL_DIR"
+        PREBUILT_FOUND=true
+    fi
+fi
+
+# Fallback: match only python version (may be wrong torch version)
+if [ "$PREBUILT_FOUND" = false ] && [ -d "$LINUX_WHL_DIR" ]; then
     for subdir in "$LINUX_WHL_DIR"/*/; do
         if [ -d "$subdir" ] && echo "$subdir" | grep -q "$PY_CP_TAG"; then
             whl_count=$(find "$subdir" -name "*.whl" 2>/dev/null | wc -l)
             if [ "$whl_count" -gt 0 ]; then
+                warn "No exact wheel match for PyTorch $TORCH_VERSION, using $(basename "$subdir") (may be incompatible)"
                 info "Found $whl_count prebuilt Linux wheels in $(basename "$subdir")"
                 PREBUILT_DIR="$subdir"
                 PREBUILT_FOUND=true
@@ -436,7 +468,7 @@ if [ "$PREBUILT_FOUND" = true ]; then
         for whl in "$PREBUILT_DIR"/${pkg_prefix}*.whl; do
             if [ -f "$whl" ]; then
                 info "  Installing $(basename "$whl")"
-                $PYTHON_CMD -m pip install "$whl" --no-deps || {
+                $PYTHON_CMD -m pip install --force-reinstall --no-deps "$whl" || {
                     warn "  Failed to install $(basename "$whl")"
                 }
                 break
@@ -456,7 +488,7 @@ if [ "$PREBUILT_FOUND" = true ]; then
         done
         if [ "$already" = false ]; then
             info "  Installing $base"
-            $PYTHON_CMD -m pip install "$whl" --no-deps || warn "  Failed to install $base"
+            $PYTHON_CMD -m pip install --force-reinstall --no-deps "$whl" || warn "  Failed to install $base"
         fi
     done
 

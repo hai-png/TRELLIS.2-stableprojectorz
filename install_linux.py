@@ -414,25 +414,46 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
             print("  GPU does not support Flash Attention (pre-Ampere). Using xformers instead.")
             print("  You can set ATTN_BACKEND=xformers before running the app.")
 
-        # 2.4. Pillow (use SIMD on Linux if available, else standard)
+        # 2.4. Pillow — prefer standard Pillow over Pillow-SIMD
+        # Pillow-SIMD 9.5 is very old and breaks modern packages (gradio, etc.)
+        # Only use Pillow-SIMD if a version >= 10.0 is available
         print("\n--- Configuring Pillow ---")
-        # Try Pillow-SIMD first (requires libjpeg-dev)
         try:
-            subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "pillow"],
-                           capture_output=True)
-            pip_install("pillow-simd", desc="Installing Pillow-SIMD", fatal=False)
-            # Verify
-            check = subprocess.run(
-                [sys.executable, "-c", "from PIL import Image; print('Pillow-SIMD OK')"],
-                capture_output=True, text=True
+            # Check if Pillow-SIMD >= 10 is available
+            simd_check = subprocess.run(
+                [sys.executable, "-m", "pip", "index", "versions", "pillow-simd"],
+                capture_output=True, text=True, timeout=15
             )
-            if check.returncode != 0:
-                print("  Pillow-SIMD failed, falling back to standard Pillow...")
-                subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "Pillow-SIMD"],
+            use_simd = False
+            if simd_check.returncode == 0:
+                # Parse latest version
+                for line in simd_check.stdout.splitlines():
+                    if "LATEST" in line.upper() or "pillow-simd" in line.lower():
+                        # Extract version number
+                        import re
+                        versions = re.findall(r'(\d+)\.\d+\.\d+', line)
+                        if versions and int(versions[0]) >= 10:
+                            use_simd = True
+                            break
+
+            if use_simd:
+                subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "pillow"],
                                capture_output=True)
-                pip_install("pillow", desc="Installing standard Pillow")
+                pip_install("pillow-simd", desc="Installing Pillow-SIMD", fatal=False)
+                check = subprocess.run(
+                    [sys.executable, "-c", "from PIL import Image; print('Pillow-SIMD OK')"],
+                    capture_output=True, text=True
+                )
+                if check.returncode != 0:
+                    print("  Pillow-SIMD failed, falling back to standard Pillow...")
+                    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "Pillow-SIMD"],
+                                   capture_output=True)
+                    pip_install("pillow", desc="Installing standard Pillow")
+                else:
+                    print("  Pillow-SIMD installed successfully.")
             else:
-                print("  Pillow-SIMD installed successfully.")
+                print("  Pillow-SIMD < 10.0 is too old for modern packages. Using standard Pillow.")
+                pip_install("pillow", desc="Installing standard Pillow")
         except Exception:
             print("  Falling back to standard Pillow...")
             pip_install("pillow", desc="Installing standard Pillow")
@@ -452,8 +473,12 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
 
         py_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
-        # Map torch versions to wheel subdirectory names from visualbruno repo
-        # Torch270 = torch 2.7.0, Torch291 = torch 2.9.1, Torch2110 = torch 2.11.0
+        # Map torch versions to wheel subdirectory names
+        # Auto-derive from version: 2.9.1 -> torch291_cp312
+        torch_ver_clean = torch_version.replace('.', '')  # e.g. "291"
+        torch_wheel_dir_auto = f"torch{torch_ver_clean}_{py_version}"
+
+        # Explicit overrides for known combos (if directory names differ)
         torch_wheel_dir_map = {
             "2.7.0": "torch270_cp312",
             "2.9.1": "torch291_cp312",
@@ -465,16 +490,26 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
         wheel_dir = None
         wheel_source = "local"
 
-        # Try exact match first
+        # Try explicit map first
         if torch_version in torch_wheel_dir_map:
             candidate = whl_base / torch_wheel_dir_map[torch_version]
             if candidate.exists() and any(candidate.glob("*.whl")):
                 wheel_dir = candidate
+                print(f"  Found exact wheel match: {torch_wheel_dir_map[torch_version]}")
 
-        # Try to find any directory matching our Python version
+        # Try auto-derived name
+        if wheel_dir is None:
+            candidate = whl_base / torch_wheel_dir_auto
+            if candidate.exists() and any(candidate.glob("*.whl")):
+                wheel_dir = candidate
+                print(f"  Found auto-matched wheels: {torch_wheel_dir_auto}")
+
+        # Try to find any directory matching our Python version (fallback, may be wrong torch)
         if wheel_dir is None:
             for subdir in sorted(whl_base.iterdir()) if whl_base.exists() else []:
                 if subdir.is_dir() and py_version in subdir.name:
+                    print(f"  WARNING: No exact wheel match for PyTorch {torch_version}.")
+                    print(f"  Using {subdir.name} (wheels may be for a different torch version)")
                     wheel_dir = subdir
                     break
 
@@ -540,11 +575,11 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
 
             for whl in whl_files_sorted:
                 print(f"  Installing: {whl.name}")
-                # Use --no-deps for CUDA packages to avoid pip trying to fetch
-                # git dependencies from o_voxel's metadata (even though we fixed
-                # the wheels, this is extra safety)
+                # Use --force-reinstall --no-deps to replace any previously installed
+                # version (e.g., from a different torch version build) and avoid
+                # pip trying to resolve git+ dependencies from wheel metadata
                 run_command(
-                    f'{sys.executable} -m pip install --no-cache-dir --no-deps "{whl}"',
+                    f'{sys.executable} -m pip install --no-cache-dir --force-reinstall --no-deps "{whl}"',
                     desc=f"Installing {whl.name}",
                     fatal=False
                 )
