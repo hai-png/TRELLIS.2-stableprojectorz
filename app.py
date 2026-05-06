@@ -3,7 +3,10 @@
 import os
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
-os.environ.setdefault('SETUPTOOLS_USE_DISTUTILS', 'stdlib')
+# SETUPTOOLS_USE_DISTUTILS=stdlib is a Windows-only workaround.
+# On Linux it can cause issues with distutils, so we skip it.
+if os.name == 'nt':
+    os.environ.setdefault('SETUPTOOLS_USE_DISTUTILS', 'stdlib')
 
 import sys
 import traceback

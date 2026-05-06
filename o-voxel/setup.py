@@ -39,7 +39,7 @@ arch_flags = [
 nvcc_flags.extend(arch_flags)
 
 # Explicitly set the list for PyTorch to avoid auto-detection issues during build
-os.environ['TORCH_CUDA_ARCH_LIST'] = '6.1;7.5;8.6;8.9;9.0'
+os.environ['TORCH_CUDA_ARCH_LIST'] = '6.1;7.5;8.6;8.9;9.0'  # Both ; and space work on Linux
 
 setup(
     name="o_voxel",

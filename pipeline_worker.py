@@ -29,16 +29,31 @@ def hunt_syncs(**kwargs):
 
 
 def _apply_patches():
-    """Apply Windows compatibility patches for flex_gemm."""
+    """Apply compatibility patches for flex_gemm.
+
+    On Windows, flex_gemm lacks native triton support, so we inject a fallback.
+    On Linux, triton is available natively, so we only apply patches if triton
+    is genuinely missing (e.g. in some unusual build configurations).
+    """
+    import os
     import torch
+    is_linux = os.name != 'nt'
 
     try:
         import flex_gemm.ops.spconv as spconv
         from flex_gemm.ops.spconv import Algorithm
-        # Force the algorithm to EXPLICIT_GEMM
-        # This bypasses the 'kernels.triton' error by using standard Torch Matrix Multiplication
-        spconv.ALGORITHM = Algorithm.EXPLICIT_GEMM
-        print("[WORKER] flex_gemm EXPLICIT_GEMM patch applied.")
+        # On Linux with working triton, use the default algorithm.
+        # On Windows (or Linux without triton), force EXPLICIT_GEMM.
+        try:
+            import triton as _triton_check  # noqa: F401
+            if is_linux:
+                print("[WORKER] flex_gemm: native triton available, using default algorithm.")
+            else:
+                spconv.ALGORITHM = Algorithm.EXPLICIT_GEMM
+                print("[WORKER] flex_gemm EXPLICIT_GEMM patch applied (Windows).")
+        except ImportError:
+            spconv.ALGORITHM = Algorithm.EXPLICIT_GEMM
+            print("[WORKER] flex_gemm EXPLICIT_GEMM patch applied (triton not available).")
     except ImportError:
         print("[WORKER] Could not patch flex_gemm spconv.")
     except Exception as e:
@@ -47,32 +62,36 @@ def _apply_patches():
     try:
         import flex_gemm.kernels as _fgk
         if not hasattr(_fgk, 'triton'):
-            class _TritonFallback:
-                @staticmethod
-                def indice_weighed_sum_fwd(feats, indices, weights):
-                    N = feats.shape[0]
-                    idx = indices.long().clamp(min=0, max=N - 1)  # [M, 8]
-                    
-                    M_shape, K = idx.shape
-                    C = feats.shape[-1]
-                    
-                    # Accumulate sequentially to avoid a massive [M, K, C] memory spike
-                    out = torch.zeros((M_shape, C), dtype=feats.dtype, device=feats.device)
-                    for i in range(K):
-                        out += feats[idx[:, i]] * weights[:, i].unsqueeze(-1)
-                    return out
+            # Only inject the slow Python fallback if triton is truly unavailable.
+            # On Linux, triton should be installed and this block should NOT execute.
+            try:
+                import triton as _triton_check  # noqa: F401
+                print("[WORKER] flex_gemm.kernels has no 'triton' attr, but triton is installed. "
+                      "This may indicate a build issue with flex_gemm.")
+            except ImportError:
+                class _TritonFallback:
+                    @staticmethod
+                    def indice_weighed_sum_fwd(feats, indices, weights):
+                        N = feats.shape[0]
+                        idx = indices.long().clamp(min=0, max=N - 1)  # [M, 8]
+                        M_shape, K = idx.shape
+                        C = feats.shape[-1]
+                        out = torch.zeros((M_shape, C), dtype=feats.dtype, device=feats.device)
+                        for i in range(K):
+                            out += feats[idx[:, i]] * weights[:, i].unsqueeze(-1)
+                        return out
 
-                @staticmethod
-                def indice_weighed_sum_bwd_input(grad_output, indices, weights, N):
-                    M, C = grad_output.shape
-                    idx = indices.long().clamp(min=0, max=N - 1)
-                    weighted_grad = grad_output.unsqueeze(1) * weights.unsqueeze(-1)  # [M, 8, C]
-                    grad_feats = torch.zeros(N, C, device=grad_output.device, dtype=grad_output.dtype)
-                    grad_feats.scatter_add_(0, idx.reshape(-1, 1).expand(-1, C), weighted_grad.reshape(-1, C))
-                    return grad_feats
+                    @staticmethod
+                    def indice_weighed_sum_bwd_input(grad_output, indices, weights, N):
+                        M, C = grad_output.shape
+                        idx = indices.long().clamp(min=0, max=N - 1)
+                        weighted_grad = grad_output.unsqueeze(1) * weights.unsqueeze(-1)  # [M, 8, C]
+                        grad_feats = torch.zeros(N, C, device=grad_output.device, dtype=grad_output.dtype)
+                        grad_feats.scatter_add_(0, idx.reshape(-1, 1).expand(-1, C), weighted_grad.reshape(-1, C))
+                        return grad_feats
 
-            _fgk.triton = _TritonFallback()
-            print("[WORKER] flex_gemm Triton fallback patch applied.")
+                _fgk.triton = _TritonFallback()
+                print("[WORKER] flex_gemm Triton fallback patch applied (triton not installed).")
     except ImportError:
         print("[WORKER] Could not patch flex_gemm triton fallback.")
     except Exception as e:
@@ -286,7 +305,9 @@ class PipelineWorker:
     """Manages a subprocess that owns the GPU pipeline."""
 
     def __init__(self):
-        ctx = mp.get_context('spawn')  # 'spawn' is required for CUDA on Windows
+        # 'spawn' is the safest context for CUDA across all platforms.
+        # On Linux, 'forkserver' is also an option but 'spawn' avoids CUDA init issues.
+        ctx = mp.get_context('spawn')
         self.cmd_queue = ctx.Queue()
         self.result_queue = ctx.Queue()
         self.process = ctx.Process(target=_worker_main, args=(self.cmd_queue, self.result_queue))
