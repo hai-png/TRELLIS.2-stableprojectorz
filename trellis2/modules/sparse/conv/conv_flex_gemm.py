@@ -9,6 +9,142 @@ from . import config
 import flex_gemm
 from flex_gemm.ops.spconv import sparse_submanifold_conv3d, Algorithm 
 
+# ---------------------------------------------------------------------------
+# Pure-torch fallback for building the neighbor map when the prebuilt
+# flex_gemm CUDA kernel doesn't support the current GPU compute capability.
+# ---------------------------------------------------------------------------
+
+_flex_gemm_cuda_ok = None   # None = not tested yet, True/False = tested
+
+
+def _compute_neighbor_map_torch(coords, spatial_shape, kernel_size, dilation):
+    """Build a submanifold-conv3d neighbor map using pure PyTorch operations.
+
+    This is slower than the custom CUDA kernel but works on every GPU.
+
+    Args:
+        coords:        (N, 4) int tensor — [batch, z, y, x]
+        spatial_shape: torch.Size  — (B, D, H, W)
+        kernel_size:   (Kw, Kh, Kd) tuple
+        dilation:      (dw, dh, dd) tuple
+
+    Returns:
+        neighbor_map:  (N, V) int32 tensor — neighbor voxel indices, -1 = missing
+    """
+    Kw, Kh, Kd = kernel_size
+    dw, dh, dd = dilation
+    V = Kd * Kh * Kw
+    N = coords.shape[0]
+    device = coords.device
+
+    # Build a hash map: flat_spatial_key -> voxel_index
+    B, D, H, W = spatial_shape
+    # Flat key = b * (D*H*W) + z * (H*W) + y * W + x
+    batch = coords[:, 0]
+    z = coords[:, 1]
+    y = coords[:, 2]
+    x = coords[:, 3]
+    flat_keys = (batch * (D * H * W) + z * (H * W) + y * W + x).long()
+
+    # Use a simple Python dict for the hash map (transferred once)
+    key_to_idx = {}
+    keys_cpu = flat_keys.cpu().numpy()
+    for idx in range(N):
+        key_to_idx[int(keys_cpu[idx])] = idx
+
+    # Compute neighbor offsets
+    neighbor_map = torch.full((N, V), -1, dtype=torch.int32, device=device)
+    coords_cpu = coords.cpu()
+    neighbor_map_cpu = neighbor_map.cpu()
+
+    dz_offsets = [(kz - Kd // 2) * dd for kz in range(Kd)]
+    dy_offsets = [(ky - Kh // 2) * dh for ky in range(Kh)]
+    dx_offsets = [(kx - Kw // 2) * dw for kx in range(Kw)]
+
+    for vi, (dz, dy, dx) in enumerate(
+        (dz, dy, dx)
+        for dz in dz_offsets
+        for dy in dy_offsets
+        for dx in dx_offsets
+    ):
+        if dz == 0 and dy == 0 and dx == 0:
+            # Self-connection — every voxel is its own neighbor
+            neighbor_map_cpu[:, vi] = torch.arange(N, dtype=torch.int32)
+            continue
+
+        nb_z = coords_cpu[:, 1] + dz
+        nb_y = coords_cpu[:, 2] + dy
+        nb_x = coords_cpu[:, 3] + dx
+
+        # Bounds check
+        valid = (
+            (nb_z >= 0) & (nb_z < D) &
+            (nb_y >= 0) & (nb_y < H) &
+            (nb_x >= 0) & (nb_x < W)
+        )
+
+        nb_keys = (batch.cpu().long() * (D * H * W) +
+                   nb_z.long() * (H * W) +
+                   nb_y.long() * W +
+                   nb_x.long()).numpy()
+
+        for i in range(N):
+            if valid[i]:
+                nb_idx = key_to_idx.get(int(nb_keys[i]), -1)
+                neighbor_map_cpu[i, vi] = nb_idx
+
+    neighbor_map.copy_(neighbor_map_cpu)
+    return neighbor_map
+
+
+def _compute_neighbor_cache_torch(coords, spatial_shape, kernel_size, dilation):
+    """Same return format as SubMConv3dFunction._compute_neighbor_cache."""
+    neighbor_map = _compute_neighbor_map_torch(coords, spatial_shape, kernel_size, dilation)
+    return {'neighbor_map': neighbor_map}
+
+
+def _try_cuda_neighbor_cache(coords, spatial_shape, kernel_size, dilation):
+    """Try the CUDA kernel, return None if it fails with arch mismatch."""
+    global _flex_gemm_cuda_ok
+    from flex_gemm.ops.spconv.submanifold_conv3d import SubMConv3dFunction
+
+    if _flex_gemm_cuda_ok is False:
+        return None  # Already known to be broken
+
+    try:
+        cache = SubMConv3dFunction._compute_neighbor_cache(
+            coords, spatial_shape, kernel_size, dilation
+        )
+        _flex_gemm_cuda_ok = True
+        return cache
+    except (RuntimeError, torch.AcceleratorError) as exc:
+        msg = str(exc).lower()
+        if 'no kernel image' in msg or 'no kernel image is available' in msg:
+            if _flex_gemm_cuda_ok is None:
+                import warnings
+                cc = torch.cuda.get_device_capability()
+                warnings.warn(
+                    f"flex_gemm CUDA kernel does not support GPU sm_{cc[0]}{cc[1]}. "
+                    f"Falling back to pure-torch neighbor map (slower but compatible). "
+                    f"To fix: rebuild flex_gemm from source with TORCH_CUDA_ARCH_LIST='{cc[0]}.{cc[1]}'",
+                    stacklevel=3,
+                )
+            _flex_gemm_cuda_ok = False
+            return None
+        raise
+
+
+def _compute_neighbor_cache(coords, spatial_shape, kernel_size, dilation):
+    """Compute neighbor cache, falling back to torch if CUDA kernel fails."""
+    cache = _try_cuda_neighbor_cache(coords, spatial_shape, kernel_size, dilation)
+    if cache is not None:
+        return cache
+    return _compute_neighbor_cache_torch(coords, spatial_shape, kernel_size, dilation)
+
+
+# ---------------------------------------------------------------------------
+# Init / forward functions
+# ---------------------------------------------------------------------------
 
 def sparse_conv3d_init(self, in_channels, out_channels, kernel_size, stride=1, dilation=1, padding=None, bias=True, indice_key=None):
     assert stride == 1 and (padding is None), 'Currently flex_gemm implementation only support submanifold sparse convolution (stride=1, padding=None)'
@@ -55,15 +191,14 @@ def sparse_conv3d_forward(self, x: SparseTensor) -> SparseTensor:
 
     # Build neighbor cache if not available (uses CUDA kernels, no Triton needed)
     if neighbor_cache is None:
-        from flex_gemm.ops.spconv.submanifold_conv3d import SubMConv3dFunction
         neighbor_map_bytes = x.feats.shape[0] * V * 4  # uint32
         if neighbor_map_bytes >= 256 * 1024 * 1024:
-            # Large map � bounce feats to CPU so feats (1.37GB) and
+            # Large map — bounce feats to CPU so feats (1.37GB) and
             # neighbor_map (1.16GB) never coexist on GPU during build.
             feats_cpu = x.feats.cpu()
             x.feats = torch.empty(0, dtype=x.feats.dtype, device='cpu')
             torch.cuda.empty_cache()
-            neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(
+            neighbor_cache = _compute_neighbor_cache(
                 x.coords,
                 torch.Size([*x.shape, *x.spatial_shape]),
                 (Kw, Kh, Kd),
@@ -76,7 +211,7 @@ def sparse_conv3d_forward(self, x: SparseTensor) -> SparseTensor:
             del feats_cpu
             stream_from_cpu = True
         else:
-            neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(
+            neighbor_cache = _compute_neighbor_cache(
                 x.coords,
                 torch.Size([*x.shape, *x.spatial_shape]),
                 (Kw, Kh, Kd),
@@ -100,7 +235,7 @@ def sparse_conv3d_forward(self, x: SparseTensor) -> SparseTensor:
     CHUNK = max(1024, _cap // im2col_bytes_per_voxel)
 
     # For large outputs, accumulate to CPU so feats + output
-    # never coexist on GPU.  At 10.7M voxels � 64ch � fp16 each is 1.37GB;
+    # never coexist on GPU.  At 10.7M voxels × 64ch × fp16 each is 1.37GB;
     # overlapping them pushes peak to 3GB.  Writing to CPU keeps peak at ~1.5GB.
     output_bytes = N * Co * feats.element_size()
     offload_output = output_bytes >= 256 * 1024 * 1024

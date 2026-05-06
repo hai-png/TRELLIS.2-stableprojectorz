@@ -558,6 +558,28 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
         cuda_packages_installed = False
         if wheel_dir is not None:
             print(f"\n--- Installing CUDA packages from prebuilt wheels ({wheel_dir.name}) ---")
+
+            # Warn if the GPU architecture may not be supported by prebuilt wheels.
+            # The prebuilt flex_gemm wheels are compiled for specific compute
+            # capabilities.  If the user's GPU is not covered, the CUDA kernel
+            # will fail at runtime with "no kernel image is available for execution".
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    cc = torch.cuda.get_device_capability()
+                    sm = f"{cc[0]}.{cc[1]}"
+                    # Prebuilt wheels typically cover sm_86 and sm_120 only.
+                    # Common unsupported archs: 7.5 (T4), 8.9 (L4/RTX 4090), 9.0 (H100)
+                    known_supported = {'8.0', '8.6', '12.0'}
+                    if sm not in known_supported:
+                        print(f"\n  ⚠️  WARNING: Your GPU has compute capability {sm} (sm_{cc[0]}{cc[1]}).")
+                        print(f"      Prebuilt wheels may not include CUDA kernels for this GPU.")
+                        print(f"      If you get 'no kernel image' errors, rebuild flex_gemm from source:")
+                        print(f"        TORCH_CUDA_ARCH_LIST='{sm}' pip install --force-reinstall --no-deps <flex_gemm_wheel_or_source>")
+                        print()
+            except ImportError:
+                pass
+
             whl_files = sorted(wheel_dir.glob("*.whl"))
 
             # Define install order: dependencies first, then dependents
@@ -633,7 +655,19 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
                     f"git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git {flexgemm_dir}",
                     desc="Cloning FlexGEMM"
                 )
-            pip_install(str(flexgemm_dir), desc="Installing FlexGEMM", fatal=False)
+            # Set TORCH_CUDA_ARCH_LIST so the CUDA kernels are compiled for
+            # common GPU architectures (not just the build machine's GPU).
+            # Without this, the wheel only works on the specific GPU it was
+            # built on, causing "no kernel image is available for execution".
+            old_arch_list = os.environ.get('TORCH_CUDA_ARCH_LIST')
+            os.environ['TORCH_CUDA_ARCH_LIST'] = '6.1;7.0;7.5;8.0;8.6;8.9;9.0'
+            try:
+                pip_install(str(flexgemm_dir), desc="Installing FlexGEMM", fatal=False)
+            finally:
+                if old_arch_list is not None:
+                    os.environ['TORCH_CUDA_ARCH_LIST'] = old_arch_list
+                else:
+                    os.environ.pop('TORCH_CUDA_ARCH_LIST', None)
 
             print("\n--- Building o-voxel from source ---")
             ovoxel_src = CODE_DIR / "o-voxel"
