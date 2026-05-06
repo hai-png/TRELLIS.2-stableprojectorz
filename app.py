@@ -12,6 +12,34 @@ import sys
 import traceback
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# --- Pre-flight dependency check ---
+_MISSING_DEPS = []
+for _mod, _pip_src in [
+    ('utils3d', 'git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8'),
+    ('nvdiffrast', 'whl/linux/torch291_cp312/nvdiffrast-0.4.0-cp312-cp312-linux_x86_64.whl  (or build from source)'),
+    ('o_voxel', 'whl/linux/torch291_cp312/o_voxel-0.0.1-cp312-cp312-linux_x86_64.whl  (or build from source)'),
+    ('flex_gemm', 'whl/linux/torch291_cp312/flex_gemm-0.0.1-cp312-cp312-linux_x86_64.whl  (or build from source)'),
+    ('cumesh', 'whl/linux/torch291_cp312/cumesh-1.0-cp312-cp312-linux_x86_64.whl  (or build from source)'),
+]:
+    try:
+        __import__(_mod)
+    except ImportError:
+        _MISSING_DEPS.append((_mod, _pip_src))
+
+if _MISSING_DEPS:
+    print("=" * 70)
+    print(" MISSING DEPENDENCIES — install before running:")
+    print("=" * 70)
+    for _name, _src in _MISSING_DEPS:
+        print(f"  {_name:20s}  pip install {_src}")
+    print()
+    print("  Or run the full installer:")
+    print("    python install_linux.py --torch-version 2.9.1")
+    print("    bash setup_linux.sh --all --torch-version 2.9.1")
+    print("=" * 70)
+    sys.exit(1)
+# --- End pre-flight check ---
+
 import gradio as gr
 from datetime import datetime
 import shutil
