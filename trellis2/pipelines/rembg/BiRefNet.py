@@ -8,51 +8,77 @@ from PIL import Image
 import os # <--- Added
 
 
-def _patch_all_tied_weights_keys():
+def _patch_transformers_compat():
     """Compatibility patch for transformers >= 4.49.
 
-    In transformers 4.49+, ``_move_missing_keys_from_meta_to_device`` calls
-    ``self.all_tied_weights_keys.keys()``.  Custom model classes loaded via
-    ``trust_remote_code=True`` (e.g. ZhengPeng7/BiRefNet) may have been built
-    against an older transformers version and lack this property.
+    In transformers 4.49+, two new patterns appear:
 
-    We ensure the property exists on ``PreTrainedModel`` **and** we wrap the
-    internal method so that, even if a dynamically-loaded subclass somehow
-    misses the property, we add it on-the-fly instead of crashing.
+    1. ``post_init()`` does ``self.all_tied_weights_keys = ...`` (SET)
+    2. ``_move_missing_keys_from_meta_to_device()`` does
+       ``self.all_tied_weights_keys.keys()`` (GET)
+
+    Custom model classes loaded via ``trust_remote_code=True``
+    (e.g. ZhengPeng7/BiRefNet) may have been built against an older
+    transformers version and lack this attribute entirely.  Adding a
+    read-only ``@property`` fixes the GET but breaks the SET ("property
+    has no setter").  Instead we install a read-write property whose
+    getter returns the instance-level value if present, or an empty dict
+    as a safe default; the setter stores into ``__dict__`` so that
+    ``post_init()`` works normally.
     """
-    # --- 1. Ensure the property exists on PreTrainedModel itself ---
-    if not isinstance(getattr(PreTrainedModel, 'all_tied_weights_keys', None), property):
+
+    # --- 1. Ensure all_tied_weights_keys is a read-write property ---
+    existing = getattr(PreTrainedModel, 'all_tied_weights_keys', None)
+    needs_patch = (
+        existing is None
+        or (isinstance(existing, property) and existing.fset is None)
+    )
+    if needs_patch:
         @property
         def all_tied_weights_keys(self):
-            """Return a dict mapping every tied-weight key to its group."""
+            """Return tied-weights dict; default to empty if not yet set."""
+            val = self.__dict__.get('all_tied_weights_keys')
+            if val is not None:
+                return val
+            # Fallback: compute from _tied_weights_keys if available
             tied_groups = getattr(self, '_tied_weights_keys', None) or []
             all_keys = {}
             for group in tied_groups:
                 for key in group:
                     all_keys[key] = group
             return all_keys
+
+        @all_tied_weights_keys.setter
+        def all_tied_weights_keys(self, value):
+            """Allow post_init() to set the attribute normally."""
+            self.__dict__['all_tied_weights_keys'] = value
+
         PreTrainedModel.all_tied_weights_keys = all_tied_weights_keys
 
-    # --- 2. Wrap _move_missing_keys_from_meta_to_device as a safety-net ---
+    # --- 2. Ensure get_expanded_tied_weights_keys exists (added in 4.49) ---
+    if not hasattr(PreTrainedModel, 'get_expanded_tied_weights_keys'):
+        def get_expanded_tied_weights_keys(self, all_submodels=False):
+            """Stub for older transformers that lack this method."""
+            tied_groups = getattr(self, '_tied_weights_keys', None) or []
+            all_keys = {}
+            for group in tied_groups:
+                for key in group:
+                    all_keys[key] = group
+            return all_keys
+        PreTrainedModel.get_expanded_tied_weights_keys = get_expanded_tied_weights_keys
+
+    # --- 3. Wrap _move_missing_keys_from_meta_to_device as safety-net ---
     _orig = getattr(PreTrainedModel, '_move_missing_keys_from_meta_to_device', None)
     if _orig is not None and not getattr(_orig, '_patched_atkw', False):
         def _safe_move_missing(self, *args, **kwargs):
             try:
                 return _orig(self, *args, **kwargs)
             except AttributeError as exc:
-                if 'all_tied_weights_keys' in str(exc):
-                    # Dynamically add the missing property to *this* model class
-                    cls = type(self)
-                    if not isinstance(getattr(cls, 'all_tied_weights_keys', None), property):
-                        @property
-                        def _atwk(inner_self):
-                            tied_groups = getattr(inner_self, '_tied_weights_keys', None) or []
-                            all_keys = {}
-                            for group in tied_groups:
-                                for key in group:
-                                    all_keys[key] = group
-                            return all_keys
-                        cls.all_tied_weights_keys = _atwk
+                msg = str(exc)
+                if 'all_tied_weights_keys' in msg:
+                    # Ensure this specific instance has the attribute
+                    if 'all_tied_weights_keys' not in self.__dict__:
+                        self.__dict__['all_tied_weights_keys'] = {}
                     return _orig(self, *args, **kwargs)
                 raise
         _safe_move_missing._patched_atkw = True
@@ -60,7 +86,7 @@ def _patch_all_tied_weights_keys():
 
 
 # Apply the patch once when the module is imported
-_patch_all_tied_weights_keys()
+_patch_transformers_compat()
 
 
 class BiRefNet:

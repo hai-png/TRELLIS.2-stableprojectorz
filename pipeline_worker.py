@@ -101,7 +101,7 @@ def _apply_patches():
 def _worker_main(cmd_queue, result_queue):
     """Worker process main loop. Owns the pipeline and all GPU resources."""
     os.environ["TORCHDYNAMO_DISABLE"] = "1"
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "garbage_collection_threshold:0.65"
+    os.environ["PYTORCH_ALLOC_CONF"] = "garbage_collection_threshold:0.65"
     os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -110,20 +110,45 @@ def _worker_main(cmd_queue, result_queue):
         _apply_patches()
 
         # Apply transformers compatibility patch BEFORE any model loading.
-        # In transformers >= 4.49, _move_missing_keys_from_meta_to_device
-        # references self.all_tied_weights_keys, which custom models loaded
-        # via trust_remote_code=True (e.g. BiRefNet/RMBG-2.0) may lack.
+        # In transformers >= 4.49, post_init() SETS all_tied_weights_keys and
+        # _move_missing_keys_from_meta_to_device() GETS it.  Custom models
+        # loaded via trust_remote_code=True may lack it.  We need a read-WRITE
+        # property (not read-only) so post_init() can set it.
         from transformers import PreTrainedModel
-        if not isinstance(getattr(PreTrainedModel, 'all_tied_weights_keys', None), property):
+        existing = getattr(PreTrainedModel, 'all_tied_weights_keys', None)
+        needs_patch = (
+            existing is None
+            or (isinstance(existing, property) and existing.fset is None)
+        )
+        if needs_patch:
             @property
             def all_tied_weights_keys(self):
+                val = self.__dict__.get('all_tied_weights_keys')
+                if val is not None:
+                    return val
                 tied_groups = getattr(self, '_tied_weights_keys', None) or []
                 all_keys = {}
                 for group in tied_groups:
                     for key in group:
                         all_keys[key] = group
                 return all_keys
+
+            @all_tied_weights_keys.setter
+            def all_tied_weights_keys(self, value):
+                self.__dict__['all_tied_weights_keys'] = value
+
             PreTrainedModel.all_tied_weights_keys = all_tied_weights_keys
+
+        # Also stub get_expanded_tied_weights_keys for older custom models
+        if not hasattr(PreTrainedModel, 'get_expanded_tied_weights_keys'):
+            def get_expanded_tied_weights_keys(self, all_submodels=False):
+                tied_groups = getattr(self, '_tied_weights_keys', None) or []
+                all_keys = {}
+                for group in tied_groups:
+                    for key in group:
+                        all_keys[key] = group
+                return all_keys
+            PreTrainedModel.get_expanded_tied_weights_keys = get_expanded_tied_weights_keys
 
         import torch
         import cv2

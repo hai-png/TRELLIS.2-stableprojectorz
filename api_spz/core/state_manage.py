@@ -87,7 +87,7 @@ class TrellisState:
         """Load the Trellis 2 pipeline and move it to the target device."""
         import os
         os.environ["TORCHDYNAMO_DISABLE"] = "1"
-        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "garbage_collection_threshold:0.65"
+        os.environ["PYTORCH_ALLOC_CONF"] = "garbage_collection_threshold:0.65"
         os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
         os.environ.setdefault('SPARSE_DEBUG', '0')
         # SETUPTOOLS_USE_DISTUTILS=stdlib is a Windows-only workaround.
@@ -96,6 +96,46 @@ class TrellisState:
             os.environ.setdefault('SETUPTOOLS_USE_DISTUTILS', 'stdlib')
 
         _apply_patches()
+
+        # Apply transformers compatibility patch BEFORE any model loading.
+        # In transformers >= 4.49, post_init() SETS all_tied_weights_keys and
+        # _move_missing_keys_from_meta_to_device() GETS it.  Custom models
+        # loaded via trust_remote_code=True may lack it.  We need a read-WRITE
+        # property (not read-only) so post_init() can set it.
+        from transformers import PreTrainedModel
+        existing = getattr(PreTrainedModel, 'all_tied_weights_keys', None)
+        needs_patch = (
+            existing is None
+            or (isinstance(existing, property) and existing.fset is None)
+        )
+        if needs_patch:
+            @property
+            def all_tied_weights_keys(self):
+                val = self.__dict__.get('all_tied_weights_keys')
+                if val is not None:
+                    return val
+                tied_groups = getattr(self, '_tied_weights_keys', None) or []
+                all_keys = {}
+                for group in tied_groups:
+                    for key in group:
+                        all_keys[key] = group
+                return all_keys
+
+            @all_tied_weights_keys.setter
+            def all_tied_weights_keys(self, value):
+                self.__dict__['all_tied_weights_keys'] = value
+
+            PreTrainedModel.all_tied_weights_keys = all_tied_weights_keys
+
+        if not hasattr(PreTrainedModel, 'get_expanded_tied_weights_keys'):
+            def get_expanded_tied_weights_keys(self, all_submodels=False):
+                tied_groups = getattr(self, '_tied_weights_keys', None) or []
+                all_keys = {}
+                for group in tied_groups:
+                    for key in group:
+                        all_keys[key] = group
+                return all_keys
+            PreTrainedModel.get_expanded_tied_weights_keys = get_expanded_tied_weights_keys
 
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
