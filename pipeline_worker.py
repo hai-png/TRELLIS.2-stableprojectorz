@@ -109,6 +109,22 @@ def _worker_main(cmd_queue, result_queue):
     try:
         _apply_patches()
 
+        # Apply transformers compatibility patch BEFORE any model loading.
+        # In transformers >= 4.49, _move_missing_keys_from_meta_to_device
+        # references self.all_tied_weights_keys, which custom models loaded
+        # via trust_remote_code=True (e.g. BiRefNet/RMBG-2.0) may lack.
+        from transformers import PreTrainedModel
+        if not isinstance(getattr(PreTrainedModel, 'all_tied_weights_keys', None), property):
+            @property
+            def all_tied_weights_keys(self):
+                tied_groups = getattr(self, '_tied_weights_keys', None) or []
+                all_keys = {}
+                for group in tied_groups:
+                    for key in group:
+                        all_keys[key] = group
+                return all_keys
+            PreTrainedModel.all_tied_weights_keys = all_tied_weights_keys
+
         import torch
         import cv2
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
