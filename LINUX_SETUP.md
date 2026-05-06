@@ -80,22 +80,24 @@ conda activate trellis2
 # 2. Install PyTorch 2.9.1 (matches prebuilt wheels — uses CUDA 12.8)
 pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128
 
-# 3. Install basic dependencies
+# 3. Install basic dependencies (from PyPI — NOT from PyTorch index!)
 pip install imageio imageio-ffmpeg tqdm easydict opencv-python-headless \
     ninja trimesh transformers "gradio==6.0.1" tensorboard pandas lpips \
-    zstandard kornia timm huggingface_hub accelerate psutil triton xformers \
-    --index-url https://download.pytorch.org/whl/cu128
+    zstandard kornia timm huggingface_hub accelerate psutil
 
-# 4. Install utils3d
+# 4. Install xformers (from PyTorch index — must match your torch version)
+pip install xformers==0.0.33 --index-url https://download.pytorch.org/whl/cu128
+
+# 5. Install utils3d
 pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
 
-# 5. Install Pillow-SIMD
+# 6. Install Pillow-SIMD
 pip uninstall -y pillow && pip install pillow-simd
 
-# 6. Install flash-attn (Ampere+ GPUs only)
+# 7. Install flash-attn (Ampere+ GPUs only)
 pip install flash-attn --no-build-isolation
 
-# 7. Install CUDA packages from prebuilt wheels (seconds, not hours!)
+# 8. Install CUDA packages from prebuilt wheels (seconds, not hours!)
 #    IMPORTANT: Install in dependency order — cumesh/flex_gemm BEFORE o_voxel
 #    Use --no-deps to avoid pip trying to resolve git+ URLs in wheel metadata
 pip install --no-deps whl/linux/torch291_cp312/cumesh*.whl
@@ -107,7 +109,7 @@ pip install --no-deps whl/linux/torch291_cp312/o_voxel*.whl
 # Install o_voxel's non-CUDA dependencies:
 pip install plyfile trimesh zstandard easydict
 
-# 8. Download model weights (optional, ~20GB)
+# 9. Download model weights (optional, ~20GB)
 python -c "from huggingface_hub import snapshot_download; snapshot_download('microsoft/TRELLIS.2-4B')"
 python -c "from huggingface_hub import snapshot_download; snapshot_download('microsoft/TRELLIS-image-large')"
 ```
@@ -285,6 +287,36 @@ pip install --no-deps whl/linux/torch291_cp312/*.whl
 pip install plyfile trimesh zstandard easydict
 ```
 The install scripts (`install_linux.py` and `setup_linux.sh`) handle this automatically.
+
+### "Could not find a version that satisfies the requirement ninja"
+This happens when you use `--index-url` pointing to the PyTorch wheel index for ALL packages. The PyTorch index only has PyTorch-specific packages (torch, torchvision, xformers, triton). General packages like `ninja` must come from PyPI:
+```bash
+# WRONG — PyTorch index doesn't have ninja:
+pip install ninja --index-url https://download.pytorch.org/whl/cu128
+
+# CORRECT — install general packages from PyPI (default), only use
+# --index-url for PyTorch-specific packages:
+pip install ninja
+pip install xformers==0.0.33 --index-url https://download.pytorch.org/whl/cu128
+```
+The install scripts handle this correctly: general deps from PyPI, xformers from PyTorch index.
+
+### "xformers requires torch>=X.Y, but you have torch Z.W"
+xformers is tightly coupled to the PyTorch version. Install the matching version:
+
+| PyTorch | xformers | CUDA Index |
+|---------|----------|------------|
+| 2.6.0 | 0.0.29.post3 | cu124 |
+| 2.7.0 | 0.0.30 | cu124 |
+| 2.8.0 | 0.0.32.post2 | cu128 |
+| 2.9.1 | 0.0.33 | cu128 |
+| 2.10.0 | 0.0.35 | cu128 |
+| 2.11.0 | 0.0.36 | cu128 |
+
+```bash
+# Example for PyTorch 2.9.1:
+pip install xformers==0.0.33 --index-url https://download.pytorch.org/whl/cu128
+```
 
 ---
 

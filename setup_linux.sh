@@ -321,7 +321,8 @@ if [ "$BASIC" = true ]; then
     # ============================================================================
     # Step 3: Basic Python Dependencies
     # ============================================================================
-    info "Installing basic Python dependencies..."
+    # General Python packages come from PyPI (not the PyTorch wheel index)
+    info "Installing basic Python dependencies from PyPI..."
     $PYTHON_CMD -m pip install \
         imageio \
         imageio-ffmpeg \
@@ -340,10 +341,25 @@ if [ "$BASIC" = true ]; then
         timm \
         huggingface_hub \
         accelerate \
-        psutil \
-        triton \
-        xformers \
-        --index-url $TORCH_INDEX
+        psutil
+
+    # Install xformers from PyTorch index (version must match torch)
+    XFORMERS_VERSION=""
+    case "$TORCH_VERSION" in
+        2.6.0)  XFORMERS_VERSION="0.0.29.post3" ;;
+        2.7.0)  XFORMERS_VERSION="0.0.30" ;;
+        2.8.0)  XFORMERS_VERSION="0.0.32.post2" ;;
+        2.9.1)  XFORMERS_VERSION="0.0.33" ;;
+        2.10.0) XFORMERS_VERSION="0.0.35" ;;
+        2.11.0) XFORMERS_VERSION="0.0.36" ;;
+    esac
+
+    if [ -n "$XFORMERS_VERSION" ]; then
+        info "Installing xformers ${XFORMERS_VERSION} (matching PyTorch ${TORCH_VERSION})..."
+        $PYTHON_CMD -m pip install "xformers==${XFORMERS_VERSION}" --index-url $TORCH_INDEX
+    else
+        warn "No known xformers version for PyTorch $TORCH_VERSION. Skipping xformers."
+    fi
 
     info "Installing utils3d from GitHub..."
     $PYTHON_CMD -m pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8

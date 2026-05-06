@@ -381,17 +381,15 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
             desc="Installing PyTorch"
         )
 
-        # 2. General Dependencies
-        print("\n--- Installing General Dependencies ---")
+        # 2. General Dependencies (from PyPI, NOT from PyTorch wheel index)
+        print("\n--- Installing General Dependencies (from PyPI) ---")
         general_deps = [
             "imageio", "imageio-ffmpeg", "tqdm", "easydict", "opencv-python-headless",
             "ninja", "trimesh", "transformers", "gradio==6.0.1", "tensorboard",
             "pandas", "lpips", "zstandard", "kornia", "timm",
             "huggingface_hub", "accelerate", "psutil",
-            # Linux uses standard triton (NOT triton-windows)
-            "triton",
         ]
-        pip_install(" ".join(general_deps), desc="Installing pip packages")
+        pip_install(" ".join(general_deps), desc="Installing pip packages from PyPI")
 
         # 2.1. Install utils3d from Git
         print("\n--- Installing utils3d ---")
