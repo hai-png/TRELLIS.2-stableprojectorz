@@ -133,7 +133,20 @@ class DinoV3FeatureExtractor:
         hidden_states = self.model.embeddings(image, bool_masked_pos=None)
         position_embeddings = self.model.rope_embeddings(image)
 
-        for i, layer_module in enumerate(self.model.layer):
+        # Find the encoder layers — location varies by transformers version:
+        #   Old:  DINOv3ViTModel.layer          (layers directly on model)
+        #   New:  DINOv3ViTModel.model.layer     (DINOv3ViTEncoder nested inside)
+        if hasattr(self.model, 'layer'):
+            encoder_layers = self.model.layer
+        elif hasattr(self.model, 'model') and hasattr(self.model.model, 'layer'):
+            encoder_layers = self.model.model.layer
+        else:
+            raise AttributeError(
+                f"Cannot find encoder layers on {type(self.model).__name__}. "
+                f"Available attributes: {[a for a in dir(self.model) if not a.startswith('_')]}"
+            )
+
+        for i, layer_module in enumerate(encoder_layers):
             hidden_states = layer_module(
                 hidden_states,
                 position_embeddings=position_embeddings,
