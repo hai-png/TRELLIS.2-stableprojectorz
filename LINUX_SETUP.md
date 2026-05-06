@@ -11,7 +11,7 @@ This guide explains how to get **TRELLIS.2-stableprojectorz** working on Linux u
 | Python | 3.11 (cp311 wheels) | 3.10, 3.11, or 3.12 |
 | CUDA wheels | `whl/*.win_amd64.whl` | **Must build from source** |
 | Triton | `triton-windows` fork | Standard `triton` from PyPI |
-| PyTorch | 2.8.0 + CUDA 12.8 | 2.6.0 + CUDA 12.4 (or 2.8.0 + CUDA 12.8) |
+| PyTorch | 2.8.0 + CUDA 12.8 | 2.9.1 + CUDA 12.8 (recommended for prebuilt wheels) |
 | xformers | 0.0.32.post2 | Matches your PyTorch version |
 | `SETUPTOOLS_USE_DISTUTILS` | Set to `stdlib` | Not needed on Linux (removed) |
 | flex_gemm patches | Forces `EXPLICIT_GEMM` + TritonFallback | Uses native triton on Linux |
@@ -77,8 +77,8 @@ python install_linux.py --torch-version 2.9.1 --skip-models --skip-hf
 conda create -n trellis2 python=3.12 -y
 conda activate trellis2
 
-# 2. Install PyTorch 2.9.1 (matches prebuilt wheels)
-pip install torch==2.9.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# 2. Install PyTorch 2.9.1 (matches prebuilt wheels — uses CUDA 12.8)
+pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128
 
 # 3. Install basic dependencies
 pip install imageio imageio-ffmpeg tqdm easydict opencv-python-headless \

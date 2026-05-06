@@ -245,6 +245,40 @@ fi
 # Step 2: Install PyTorch
 # ============================================================================
 if [ "$BASIC" = true ]; then
+    # Auto-detect correct CUDA version for the requested PyTorch version
+    # PyTorch 2.6.0–2.7.0 → cu124, 2.8.0 → cu126/cu128, 2.9.1+ → cu128
+    case "$TORCH_VERSION" in
+        2.4.*|2.5.*|2.6.*)
+            AUTO_CUDA="12.4" ;;
+        2.7.*)
+            AUTO_CUDA="12.4" ;;
+        2.8.*)
+            AUTO_CUDA="12.8" ;;
+        2.9.*)
+            AUTO_CUDA="12.8" ;;
+        2.10.*)
+            AUTO_CUDA="12.8" ;;
+        2.11.*)
+            AUTO_CUDA="12.8" ;;
+        *)
+            AUTO_CUDA="$CUDA_VERSION" ;;  # fallback to user-specified
+    esac
+
+    # Override if user explicitly changed --cuda-version from default
+    if [ "$CUDA_VERSION" != "12.4" ]; then
+        # User explicitly set --cuda-version, respect it but warn if mismatch
+        if [ "$CUDA_VERSION" != "$AUTO_CUDA" ]; then
+            warn "PyTorch $TORCH_VERSION typically requires CUDA $AUTO_CUDA, but you specified CUDA $CUDA_VERSION."
+            warn "If installation fails, try: --cuda-version $AUTO_CUDA"
+        fi
+    else
+        # Default was used; auto-detect
+        if [ "$CUDA_VERSION" != "$AUTO_CUDA" ]; then
+            info "Auto-detected CUDA $AUTO_CUDA for PyTorch $TORCH_VERSION (overriding default $CUDA_VERSION)"
+        fi
+        CUDA_VERSION="$AUTO_CUDA"
+    fi
+
     CU_TAG="cu${CUDA_VERSION//./}"
     TORCH_INDEX="https://download.pytorch.org/whl/${CU_TAG}"
 
@@ -258,6 +292,15 @@ if [ "$BASIC" = true ]; then
     elif [ "$TORCH_VERSION" = "2.8.0" ]; then
         TORCHVISION_VERSION="0.23.0"
         TORCHAUDIO_VERSION="2.8.0"
+    elif [ "$TORCH_VERSION" = "2.9.1" ]; then
+        TORCHVISION_VERSION="0.24.1"
+        TORCHAUDIO_VERSION="2.9.1"
+    elif [ "$TORCH_VERSION" = "2.10.0" ]; then
+        TORCHVISION_VERSION="0.25.0"
+        TORCHAUDIO_VERSION="2.10.0"
+    elif [ "$TORCH_VERSION" = "2.11.0" ]; then
+        TORCHVISION_VERSION="0.26.0"
+        TORCHAUDIO_VERSION="2.11.0"
     else
         TORCHVISION_VERSION=""
         TORCHAUDIO_VERSION=""

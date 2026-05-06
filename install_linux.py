@@ -330,15 +330,42 @@ def install_dependencies(cuda_version: str = "12.4", torch_version: str = "2.6.0
             download_models()
 
         # 1. PyTorch + CUDA
+        # Auto-detect correct CUDA version for the requested PyTorch version
+        # PyTorch 2.6.0–2.7.0 → cu124, 2.8.0+ → cu128
+        TORCH_CUDA_MAP = {
+            "2.6.0": "12.4", "2.6.1": "12.4",
+            "2.7.0": "12.4",
+            "2.8.0": "12.8",
+            "2.9.1": "12.8",
+            "2.10.0": "12.8",
+            "2.11.0": "12.8",
+        }
+        auto_cuda = TORCH_CUDA_MAP.get(torch_version)
+        if auto_cuda and cuda_version != auto_cuda:
+            # Check if user explicitly changed the default
+            default_cuda = "12.4"
+            if cuda_version == default_cuda:
+                # Default was used; auto-detect
+                print(f"[INFO] Auto-detected CUDA {auto_cuda} for PyTorch {torch_version} "
+                      f"(overriding default {cuda_version})")
+                cuda_version = auto_cuda
+            else:
+                # User explicitly set --cuda-version, warn if mismatch
+                print(f"[WARNING] PyTorch {torch_version} typically requires CUDA {auto_cuda}, "
+                      f"but you specified CUDA {cuda_version}.")
+                print(f"[WARNING] If installation fails, try: --cuda-version {auto_cuda}")
+
         # Determine PyTorch version strings
-        if torch_version == "2.6.0":
-            torchvision_version = "0.21.0"
-            torchaudio_version = "2.6.0"
-            xformers_version = "0.0.29.post3"
-        elif torch_version == "2.8.0":
-            torchvision_version = "0.23.0"
-            torchaudio_version = "2.8.0"
-            xformers_version = "0.0.32.post2"
+        TORCH_VISION_AUDIO = {
+            "2.6.0": ("0.21.0", "2.6.0", "0.0.29.post3"),
+            "2.7.0": ("0.22.0", "2.7.0", "0.0.30"),
+            "2.8.0": ("0.23.0", "2.8.0", "0.0.32.post2"),
+            "2.9.1": ("0.24.1", "2.9.1", "0.0.33"),
+            "2.10.0": ("0.25.0", "2.10.0", ""),
+            "2.11.0": ("0.26.0", "2.11.0", ""),
+        }
+        if torch_version in TORCH_VISION_AUDIO:
+            torchvision_version, torchaudio_version, xformers_version = TORCH_VISION_AUDIO[torch_version]
         else:
             torchvision_version = ""
             torchaudio_version = ""
@@ -655,10 +682,10 @@ def verify_installation():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Linux installer for TRELLIS.2-stableprojectorz")
-    parser.add_argument("--cuda-version", default="12.4", choices=["12.4", "12.8"],
-                        help="CUDA version for PyTorch (default: 12.4)")
+    parser.add_argument("--cuda-version", default="12.4", choices=["12.4", "12.6", "12.8"],
+                        help="CUDA version for PyTorch (default: 12.4, auto-detected for most torch versions)")
     parser.add_argument("--torch-version", default="2.6.0",
-                        help="PyTorch version (default: 2.6.0)")
+                        help="PyTorch version (default: 2.6.0). Supported: 2.6.0, 2.7.0, 2.8.0, 2.9.1, 2.10.0, 2.11.0")
     parser.add_argument("--skip-models", action="store_true",
                         help="Skip downloading dinov3 and RMBG models")
     parser.add_argument("--skip-hf", action="store_true",
